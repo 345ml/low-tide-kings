@@ -50,7 +50,7 @@ export function killPerson(world, person, attacker) {
     return;
   }
   if (person.cash > 0) dropPickup(world, 'cash', person.x + rand() * 10 - 5, person.y + rand() * 10 - 5, person.cash);
-  if (person.role === 'cop' && rand() < 0.5) dropPickup(world, 'ammo', person.x, person.y, 24);
+  if (person.role !== 'ped' && person.weapon !== 'fists' && rand() < 0.6) dropPickup(world, 'ammo', person.x, person.y, 24);
   if (attacker === world.player) {
     world.stats.kills += 1;
     reportCrime(world, person.role === 'cop' ? 'copKill' : person.role === 'ped' ? 'murder' : 'gunfire', person.x, person.y);

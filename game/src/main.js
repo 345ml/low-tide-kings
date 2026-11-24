@@ -86,6 +86,10 @@ function runGame() {
     screen = 'play';
     accumulator = 0;
     if (save) world.toast('Welcome back to Marazul Bay.');
+    else {
+      world.toast('WASD move · mouse aim · click attack · Shift sprint');
+      world.toast('F steal a car · M map · Esc pause and controls');
+    }
     announce('Playing Low Tide Kings.');
   }
 
