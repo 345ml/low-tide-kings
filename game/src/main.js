@@ -1,52 +1,64 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
-// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
+// Low Tide Kings: boot and the main loop. Builds Marazul Bay, shows the title screen over a
+// living city, then runs the game: fixed 1/60 s simulation steps, one drawn frame per display
+// frame, and the screens around play (pause, map, controls, shop, dialogue).
 //
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
-import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// ?shot=start|drive|chase|shootout (with &seed=N) stages that scene instead, paints it and sets
+// window.__shotReady for a screenshot.
+import { STEP } from './core/config.js';
+import { createIdleInput, createInput } from './core/input.js';
+import { generateCity } from './city/cityGenerator.js';
+import { resizeCamera } from './render/camera.js';
+import { createWorldRenderer } from './render/worldRenderer.js';
+import { createWorld, stepWorld } from './world/gameWorld.js';
+import { SHOP_ITEMS, buyShopItem } from './world/services.js';
+import { eraseSave, hasSave, readSave, writeSave } from './save/saveGame.js';
+import { createAudio, createSilentAudio } from './audio/soundEffects.js';
+import { createRadio } from './audio/radio.js';
+import { drawHud } from './ui/hud.js';
+import { createCityMap, drawFullMap } from './ui/minimap.js';
+import { PAUSE_ITEMS, TITLE_ITEMS, drawControls, drawPause, drawShop, drawTitle } from './ui/menus.js';
 import { stageShot } from './shots.js';
 
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
-const MAX_FRAME = 0.25;
+const MAX_FRAME = 0.1;
+const UP = ['KeyW', 'ArrowUp'];
+const DOWN = ['KeyS', 'ArrowDown'];
+const CONFIRM = ['Enter', 'NumpadEnter', 'Space'];
+const BACK = ['Escape', 'KeyP'];
 
 const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
-
 const canvas = document.getElementById('game');
 const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
+const ctx = canvas.getContext('2d');
+const city = generateCity();
+const renderer = createWorldRenderer(city);
+const cityMap = createCityMap(city);
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
+function fitCanvas(camera) {
+  const width = Math.max(640, window.innerWidth);
+  const height = Math.max(360, window.innerHeight);
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
   }
+  if (camera) resizeCamera(camera, width, height);
 }
 
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
-  }
+function announce(message) {
+  if (status.textContent !== message) status.textContent = message;
 }
 
 function runShot(name) {
-  const scene = stageShot(name, world);
+  const seed = Number.parseInt(params.get('seed') ?? '1', 10) || 1;
+  fitCanvas(null);
+  const scene = stageShot(name, city, seed, canvas.width, canvas.height);
   let painted = 0;
   function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
+    fitCanvas(scene.world.camera);
+    renderer.draw(ctx, scene.world);
+    if (scene.title) drawTitle(ctx, canvas.width, canvas.height, 0, false, 1);
+    else drawHud(ctx, scene.world, cityMap, canvas.width, canvas.height);
     painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
+    if (painted < 3) requestAnimationFrame(paint);
     else window.__shotReady = true;
   }
   requestAnimationFrame(paint);
@@ -54,81 +66,205 @@ function runShot(name) {
 
 function runGame() {
   const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
+  const idle = createIdleInput();
+  const audio = createAudio();
+  const radio = createRadio(audio);
+  const backdrop = createWorld(city, { mode: 'attract', audio: createSilentAudio() });
+  let world = null;
+  /** 'title', 'play', 'pause', 'map' or 'controls'. */
+  let screen = 'title';
+  let returnTo = 'title';
+  let menuIndex = hasSave() ? 1 : 0;
   let accumulator = 0;
   let last = performance.now();
 
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
-  function announce(message) {
-    status.textContent = message;
-  }
-
-  function startGame() {
-    world.reset();
+  function startGame(save) {
+    world = createWorld(city, { mode: 'play', audio, save });
+    fitCanvas(world.camera);
+    screen = 'play';
     accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
+    if (save) world.toast('Welcome back to Marazul Bay.');
+    announce('Playing Low Tide Kings.');
   }
 
-  function endGame() {
-    screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
-    }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
-  }
-
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
-  }
-
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
+  function saveNow(message) {
+    if (world.mission || world.wanted.stars > 0) {
+      world.toast('You can only save with no mission running and no wanted level.');
       return;
     }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
+    world.toast(writeSave(world) ? message : 'Saving is not available in this browser window.');
+  }
+
+  function moveMenu(count, skip) {
+    const keys = input.frame;
+    let move = 0;
+    if (keys.pressed(...UP)) move = -1;
+    if (keys.pressed(...DOWN)) move = 1;
+    if (!move) return;
+    do menuIndex = (menuIndex + move + count) % count;
+    while (skip && skip(menuIndex));
+    audio.play('click');
+  }
+
+  function handleTitle() {
+    const keys = input.frame;
+    const saved = hasSave();
+    moveMenu(TITLE_ITEMS.length, (n) => n === 1 && !saved);
+    if (!keys.pressed(...CONFIRM)) return;
+    audio.play('buy');
+    if (menuIndex === 0) {
+      eraseSave();
+      startGame(null);
+    } else if (menuIndex === 1) startGame(readSave());
+    else {
+      returnTo = 'title';
+      screen = 'controls';
+    }
+  }
+
+  function handlePause() {
+    const keys = input.frame;
+    moveMenu(PAUSE_ITEMS.length, null);
+    if (keys.pressed(...BACK)) {
+      screen = 'play';
+      return;
+    }
+    if (!keys.pressed(...CONFIRM)) return;
+    audio.play('buy');
+    if (menuIndex === 0) screen = 'play';
+    else if (menuIndex === 1) {
+      returnTo = 'pause';
+      screen = 'map';
+    } else if (menuIndex === 2) {
+      returnTo = 'pause';
+      screen = 'controls';
+    } else if (menuIndex === 3) {
+      saveNow('Game saved.');
+      screen = 'play';
+    } else {
+      world = null;
+      screen = 'title';
+      menuIndex = hasSave() ? 1 : 0;
+      announce('Low Tide Kings. Press Enter to start.');
+    }
+  }
+
+  function handleShop() {
+    const keys = input.frame;
+    const shop = world.shop;
+    if (keys.pressed(...UP)) shop.index = (shop.index + SHOP_ITEMS.length - 1) % SHOP_ITEMS.length;
+    if (keys.pressed(...DOWN)) shop.index = (shop.index + 1) % SHOP_ITEMS.length;
+    if (keys.pressed('Enter', 'NumpadEnter')) buyShopItem(world, SHOP_ITEMS[shop.index]);
+    if (keys.pressed('Escape', 'KeyP', 'KeyF', 'KeyE')) world.shop = null;
+    input.endStep();
+  }
+
+  function handleDialogue() {
+    const keys = input.frame;
+    if (!keys.pressed(...CONFIRM) && !keys.mouse.clicked) return;
+    const dialogue = world.dialogue;
+    input.endStep();
+    dialogue.index += 1;
+    audio.play('click');
+    if (dialogue.index >= dialogue.lines.length) world.dialogue = null;
+  }
+
+  /** Keys that work during play but are not part of the simulation. Returns false when play is held up. */
+  function handlePlay() {
+    const keys = input.frame;
+    if (world.shop) {
+      handleShop();
+      return false;
+    }
+    if (world.dialogue) {
+      handleDialogue();
+      return world.dialogue === null;
+    }
+    if (keys.pressed(...BACK)) {
+      screen = 'pause';
+      menuIndex = 0;
+      return false;
+    }
+    if (keys.pressed('KeyM')) {
+      returnTo = 'play';
+      screen = 'map';
+      return false;
+    }
+    if (keys.pressed('F5')) saveNow('Quick save done.');
+    if (keys.pressed('KeyR') && world.player.vehicle) world.toast(`Radio: ${radio.next()}`);
+    return true;
   }
 
   function frame(now) {
     requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
+    const elapsed = Math.min((now - last) / 1000, MAX_FRAME);
     last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
+    if (input.touched()) audio.unlock();
+    fitCanvas(world ? world.camera : backdrop.camera);
+
+    let running = false;
+    if (screen === 'title') handleTitle();
+    else if (screen === 'pause') handlePause();
+    else if (screen === 'map' || screen === 'controls') {
+      if (input.frame.pressed(...BACK, ...CONFIRM, 'KeyM')) screen = returnTo;
+    } else running = handlePlay();
+
+    if (screen === 'title' || (screen === 'controls' && !world)) {
+      accumulator = Math.min(accumulator + elapsed, 0.1);
+      while (accumulator >= STEP) {
+        stepWorld(backdrop, idle, STEP);
+        accumulator -= STEP;
+      }
+    } else if (running && screen === 'play') {
+      accumulator += elapsed;
+      while (accumulator >= STEP && !world.dialogue && !world.shop) {
+        stepWorld(world, input.step, STEP);
+        input.endStep();
         accumulator -= STEP;
       }
     } else {
       accumulator = 0;
+      input.endStep();
+      // A mission title should not sit on screen for the whole of a conversation.
+      if (world && world.banner && world.dialogue) {
+        world.banner.time -= elapsed;
+        if (world.banner.time <= 0) world.banner = null;
+      }
     }
-    renderer.draw(world.state, screen, best);
+
+    const shown = world ?? backdrop;
+    renderer.draw(ctx, shown);
+    const width = canvas.width;
+    const height = canvas.height;
+    if (world) {
+      drawHud(ctx, world, cityMap, width, height);
+      if (world.shop) drawShop(ctx, width, height, world);
+      if (screen === 'pause') drawPause(ctx, width, height, menuIndex, world);
+      else if (screen === 'map') drawFullMap(ctx, cityMap, world, width, height);
+    } else if (screen === 'title') drawTitle(ctx, width, height, menuIndex, hasSave(), now / 1000);
+    if (screen === 'controls') drawControls(ctx, width, height);
+
+    audio.setListener(shown.focus.x, shown.focus.y);
+    audio.update(world && screen === 'play' ? world : null);
+    radio.update(Boolean(world && screen === 'play' && world.player.vehicle && !world.respawn));
+    input.endFrame();
   }
 
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
+  // Leaving the tab pauses the game rather than letting the city run unseen.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
+    if (document.hidden && screen === 'play') {
+      screen = 'pause';
+      menuIndex = 0;
     }
   });
+  window.addEventListener('resize', () => fitCanvas(world ? world.camera : backdrop.camera));
+  // A small handle for automated play-testing from the browser console.
+  window.lowTideKings = { get world() { return world; }, get screen() { return screen; } };
 
-  announce('Block Dodger. Press Space or click to start.');
+  announce('Low Tide Kings. Press Enter to start.');
   requestAnimationFrame(frame);
 }
 
+const shot = params.get('shot');
 if (shot) runShot(shot);
 else runGame();
