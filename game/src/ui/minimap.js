@@ -1,6 +1,7 @@
 // The minimap and the full city map: the whole of Marazul Bay painted once into a small image,
 // then shown around the player in a round radar with blips for goals, shops, police and enemies.
 import { MAP_H, MAP_W, T, TILE } from '../core/config.js';
+import { findRoute, nearestNode } from '../city/roadGraph.js';
 
 const PIXELS_PER_TILE = 4;
 const TILE_COLORS = ['#1b8fa6', '#ecd9a4', '#5fae69', '#474c58', '#bdb6a8', '#d9c9b0', '#a57c50', '#666c77', '#5a606c'];
@@ -50,6 +51,37 @@ function drawBlip(ctx, x, y, marker, size) {
   }
 }
 
+const ROUTED_KINDS = { goal: 1, fare: 1, start: 1, vehicle: 1 };
+
+/** The satnav line: the shortest way by road from the player to the current destination. */
+function drawRoute(ctx, world, place) {
+  const target = world.markers.find((marker) => ROUTED_KINDS[marker.kind]);
+  if (!target || world.mode !== 'play') return;
+  const graph = world.city.graph;
+  const from = nearestNode(graph, world.focus.x, world.focus.y);
+  const to = nearestNode(graph, target.x, target.y);
+  const route = findRoute(graph, from.id, to.id);
+  // Skip the first intersection when the second is already closer than it is to the first.
+  if (route.length > 1) {
+    const second = graph.nodes[route[1]];
+    if (Math.hypot(second.x - world.focus.x, second.y - world.focus.y) < Math.hypot(second.x - from.x, second.y - from.y)) route.shift();
+  }
+  ctx.strokeStyle = '#ff5fa2';
+  ctx.lineWidth = 3.5;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  const start = place(world.focus.x, world.focus.y);
+  ctx.moveTo(start.x, start.y);
+  for (const id of route) {
+    const point = place(graph.nodes[id].x, graph.nodes[id].y);
+    ctx.lineTo(point.x, point.y);
+  }
+  const end = place(target.x, target.y);
+  ctx.lineTo(end.x, end.y);
+  ctx.stroke();
+}
+
 /** The round radar: centred on the player, north up, with far-off goals pinned to its rim. */
 export function drawMinimap(ctx, cityMap, world, cx, cy, radius) {
   const zoom = radius / 620;
@@ -64,6 +96,7 @@ export function drawMinimap(ctx, cityMap, world, cx, cy, radius) {
   ctx.drawImage(cityMap.canvas, cx - focus.x * zoom, cy - focus.y * zoom, cityMap.canvas.width * k, cityMap.canvas.height * k);
   const place = (x, y) => ({ x: cx + (x - focus.x) * zoom, y: cy + (y - focus.y) * zoom });
   const flash = Math.floor(world.clock * 6) % 2 === 0;
+  drawRoute(ctx, world, place);
   for (const vehicle of world.vehicles) {
     if (!vehicle.police || vehicle.wrecked || !vehicle.ai || vehicle.ai.type !== 'pursuit') continue;
     const p = place(vehicle.x, vehicle.y);

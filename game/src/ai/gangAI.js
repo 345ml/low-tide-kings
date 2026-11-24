@@ -10,7 +10,7 @@ export function spawnGangMember(world, x, y, weapon, tag) {
   const person = createPerson('gang', x, y);
   person.weapon = weapon;
   person.tag = tag ?? null;
-  person.ai = { type: 'gang', alert: false, strafe: rand() < 0.5 ? -1 : 1, strafeTime: randRange(1, 2.5), pause: randRange(0.3, 1), burst: 0, aim: randRange(0.08, 0.15), homeX: x, homeY: y };
+  person.ai = { type: 'gang', alert: false, strafe: rand() < 0.5 ? -1 : 1, strafeTime: randRange(1, 2.5), pause: randRange(0.8, 2), burst: 0, aim: randRange(0.1, 0.2), homeX: x, homeY: y };
   world.people.push(person);
   return person;
 }
@@ -55,11 +55,14 @@ export function thinkGang(world, person, dt) {
   if (!sight || d > weapon.range * 0.85) return;
   ai.pause -= dt;
   if (ai.pause > 0) return;
+  // The crew takes turns: only one of them starts a burst at a time.
+  if (ai.burst === 0 && !weapon.melee && world.clock < world.fireGate.gang) return;
   if (attackWith(world, person, person.weapon, angle + (rand() - 0.5) * 2 * ai.aim, null)) {
+    if (ai.burst === 0) world.fireGate.gang = world.clock + 0.6;
     ai.burst += 1;
     if (ai.burst >= (weapon.auto ? 5 : weapon.melee ? 1 : 2)) {
       ai.burst = 0;
-      ai.pause = randRange(0.6, 1.4);
+      ai.pause = randRange(0.9, 1.9);
     }
   }
 }

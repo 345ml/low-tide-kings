@@ -77,6 +77,8 @@ function runGame() {
   let menuIndex = hasSave() ? 1 : 0;
   let accumulator = 0;
   let last = performance.now();
+  let pointerX = 0;
+  let pointerY = 0;
 
   function startGame(save) {
     world = createWorld(city, { mode: 'play', audio, save });
@@ -110,7 +112,14 @@ function runGame() {
     const keys = input.frame;
     const saved = hasSave();
     moveMenu(TITLE_ITEMS.length, (n) => n === 1 && !saved);
-    if (!keys.pressed(...CONFIRM)) return;
+    // The mouse works too: point at an item, click to choose it.
+    const u = canvas.height / 720;
+    const row = Math.floor((keys.mouse.y / u - 425) / 50);
+    const over = keys.mouse.x > 60 * u && keys.mouse.x < 420 * u && row >= 0 && row < TITLE_ITEMS.length && !(row === 1 && !saved);
+    if (over && (keys.mouse.clicked || keys.mouse.x !== pointerX || keys.mouse.y !== pointerY)) menuIndex = row;
+    pointerX = keys.mouse.x;
+    pointerY = keys.mouse.y;
+    if (!keys.pressed(...CONFIRM) && !(over && keys.mouse.clicked)) return;
     audio.play('buy');
     if (menuIndex === 0) {
       eraseSave();

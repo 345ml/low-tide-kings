@@ -61,10 +61,13 @@ function stageDrive(world) {
   giveWeapon(world, 'pistol', 60);
   const vehicle = autopilotCar(world, 'cabana', '#ff5fa2', world.city.places.plaza, 1);
   clearAround(world, vehicle.x, vehicle.y, 120);
-  run(world, createIdleInput(), 5.2, () => {
+  const cruise = () => {
     vehicle.ai.cruise = 200;
     clearWanted(world);
-  });
+  };
+  run(world, createIdleInput(), 4, cruise);
+  // Carry on until the car is rolling along a street rather than waiting at a light.
+  for (let extra = 0; extra < 60 && (Math.hypot(vehicle.vx, vehicle.vy) < 170 || vehicle.ai.phase !== 'edge'); extra += 1) run(world, createIdleInput(), 0.25, cruise);
   world.banner = null;
 }
 

@@ -3,6 +3,7 @@
 import { PLAYER_TUNING, POPULATION } from '../core/config.js';
 import { dist, formatMoney } from '../core/mathUtil.js';
 import { rand } from '../core/random.js';
+import { circleBlocked } from '../city/collision.js';
 import { createCamera, isOnScreen, snapCamera, updateCamera } from '../render/camera.js';
 import { createEffects, stepEffects } from '../render/effects.js';
 import { stepPersonBody } from '../entities/person.js';
@@ -47,6 +48,8 @@ export function createWorld(city, { mode = 'play', audio, save = null }) {
     wanted: createWanted(),
     police: createPolice(),
     taxi: createTaxi(),
+    /** When each side's shooters may next start a burst, so crowds take turns firing. */
+    fireGate: { gang: 0, police: 0 },
     focus: { x: start.x, y: start.y },
     money: START_MONEY,
     progress: 0,
@@ -115,7 +118,7 @@ function stepVehicles(world, dt) {
     }
     const impact = stepVehicle(world.city, vehicle, dt);
     if (impact > 130) {
-      damageVehicle(world, vehicle, (impact - 110) * 0.075, null);
+      damageVehicle(world, vehicle, (impact - 110) * 0.055, null);
       world.fx.sparks(vehicle.x + Math.cos(vehicle.angle) * 20, vehicle.y + Math.sin(vehicle.angle) * 20, 6);
       world.audio.play('crash', vehicle.x, vehicle.y);
       if (vehicle.driver === 'player') world.shake(Math.min(12, impact / 30));
@@ -149,7 +152,7 @@ function stepVehicles(world, dt) {
       if (Math.abs(a.x - b.x) > 90 || Math.abs(a.y - b.y) > 90) continue;
       const closing = collideVehicles(a, b);
       if (closing < 80) continue;
-      const hurt = (closing - 60) * 0.085;
+      const hurt = (closing - 60) * 0.06;
       const byPlayer = a.driver === 'player' || b.driver === 'player';
       damageVehicle(world, a, hurt, b.driver === 'player' ? player : null);
       damageVehicle(world, b, hurt, a.driver === 'player' ? player : null);
@@ -161,7 +164,6 @@ function stepVehicles(world, dt) {
   // Vehicles against people on foot.
   for (const vehicle of vehicles) {
     const speed = vehicleSpeed(vehicle);
-    if (speed < 20) continue;
     const reach = vehicle.kind.length * 0.5 + 10;
     for (const person of world.people) {
       if (!person.alive || person.vehicle) continue;
@@ -172,8 +174,21 @@ function stepVehicles(world, dt) {
       const sin = Math.sin(vehicle.angle);
       const along = dx * cos + dy * sin;
       const across = -dx * sin + dy * cos;
-      if (Math.abs(along) > vehicle.kind.length * 0.5 + 5 || Math.abs(across) > vehicle.kind.width * 0.5 + 6) continue;
+      const overAlong = vehicle.kind.length * 0.5 + 5 - Math.abs(along);
+      const overAcross = vehicle.kind.width * 0.5 + 6 - Math.abs(across);
+      if (overAlong <= 0 || overAcross <= 0) continue;
       const push = across >= 0 ? 1 : -1;
+      if (speed < 20) {
+        // A standing car is solid: ease the walker out through its nearest side.
+        const ahead = along >= 0 ? 1 : -1;
+        const nx = overAcross < overAlong ? -sin * push * overAcross : cos * ahead * overAlong;
+        const ny = overAcross < overAlong ? cos * push * overAcross : sin * ahead * overAlong;
+        if (!circleBlocked(world.city, person.x + nx, person.y + ny, person.radius)) {
+          person.x += nx;
+          person.y += ny;
+        }
+        continue;
+      }
       person.knockX += -sin * push * 120 + vehicle.vx * 0.6;
       person.knockY += cos * push * 120 + vehicle.vy * 0.6;
       if (speed > 75 && (person.hitCooldown ?? 0) <= 0) {

@@ -54,7 +54,7 @@ export function spawnOfficer(world, x, y, heavy) {
     cop.look.shirt = '#20252e';
     cop.look.hat = '#11151b';
   }
-  cop.ai = { type: 'cop', aim: randRange(0.06, 0.12), burst: 0, pause: randRange(0.4, 1.2), leaving: false };
+  cop.ai = { type: 'cop', aim: randRange(0.09, 0.17), burst: 0, pause: randRange(0.4, 1.2), leaving: false };
   world.people.push(cop);
   return cop;
 }
@@ -161,6 +161,8 @@ export function thinkOfficer(world, cop, dt) {
   if (!shooting || !sight || d > 420) return;
   ai.pause -= dt;
   if (ai.pause > 0) return;
+  if (ai.burst === 0 && world.clock < world.fireGate.police) return;
+  if (ai.burst === 0) world.fireGate.police = world.clock + 0.55;
   attackWith(world, cop, cop.weapon, angle + (rand() - 0.5) * 2 * ai.aim, null);
   ai.burst += 1;
   if (ai.burst >= (cop.weapon === 'smg' ? 6 : 2)) {

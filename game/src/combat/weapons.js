@@ -18,6 +18,9 @@ export const WEAPONS = {
 
 export const WEAPON_ORDER = ['fists', 'pistol', 'smg', 'shotgun', 'rifle'];
 
+/** Shots that hit Dani do less than the same gun does in her hands, so a firefight can be survived. */
+const ENEMY_DAMAGE_SCALE = 0.36;
+
 function sameSide(shooter, target) {
   return shooter.role === target.role && shooter.role !== 'player' && shooter.role !== 'ped';
 }
@@ -50,7 +53,7 @@ export function castShot(world, shooter, x, y, angle, range, damage) {
   const hx = x + (ex - x) * best;
   const hy = y + (ey - y) * best;
   world.fx.tracer(x, y, hx, hy);
-  if (hitPerson) damagePerson(world, hitPerson, damage, shooter, angle);
+  if (hitPerson) damagePerson(world, hitPerson, hitPerson === world.player ? damage * ENEMY_DAMAGE_SCALE : damage, shooter, angle);
   else if (hitVehicle) {
     world.fx.sparks(hx, hy, 4);
     damageVehicle(world, hitVehicle, damage * 0.55, shooter);
@@ -68,7 +71,7 @@ function punch(world, person, weapon, angle) {
     const dy = other.y - person.y;
     const reach = dx * Math.cos(angle) + dy * Math.sin(angle);
     if (reach < -4 || reach > weapon.range || Math.abs(-dx * Math.sin(angle) + dy * Math.cos(angle)) > 16) continue;
-    damagePerson(world, other, weapon.damage, person, angle);
+    damagePerson(world, other, other === world.player ? weapon.damage * ENEMY_DAMAGE_SCALE : weapon.damage, person, angle);
     world.audio.play('punch', other.x, other.y);
     return;
   }
